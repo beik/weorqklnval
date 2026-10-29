@@ -1,0 +1,76 @@
+name: Verify node catalog
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: Open catalog PR number to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  verify-catalog-files:
+    name: Verify signed catalog files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Only trusted base code is executed. Candidate Git objects are read as data.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Resolve exact PR commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull_request_number }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          mapfile -t refs < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq 'select(.state == "open" and .base.ref == "main") | .base.sha, .head.sha')
+          [[ ${#refs[@]} -eq 2 ]]
+          [[ "${refs[0]}" =~ ^[a-f0-9]{40}$ && "${refs[1]}" =~ ^[a-f0-9]{40}$ ]]
+          [[ -z "$EVENT_HEAD" || "$EVENT_HEAD" == "${refs[1]}" ]]
+          echo "BASE_SHA=${refs[0]}" >> "$GITHUB_ENV"
+          echo "HEAD_SHA=${refs[1]}" >> "$GITHUB_ENV"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/${refs[1]}" \
+            -f state=pending -f context=verify-node-catalog -f description='Verifying signed catalogs' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null
+          # A stale base must be rerun; do not silently execute a different verifier.
+          [[ "$(git rev-parse HEAD)" == "${refs[0]}" ]]
+          git fetch --no-tags origin "${refs[0]}" "${refs[1]}"
+      - name: Verifier regression tests
+        run: node --test catalog-ci/verify.test.mjs
+      - name: Verify signed catalogs and changed paths
+        run: node catalog-ci/verify.mjs "$BASE_SHA" "$HEAD_SHA"
+      # pull_request_target runs on base; explicitly bind the required status to
+      # the candidate SHA so GitHub enforces validation of the actual PR head.
+      - name: Publish required status on exact PR head
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status_sha="${HEAD_SHA:-$EVENT_HEAD}"
+          [[ "$status_sha" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          status_state=failure
+          if [[ "$JOB_STATUS" == success ]]; then status_state=success; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$status_sha" \
+            -f state="$status_state" -f context=verify-node-catalog -f description='Signed catalog validation' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null
