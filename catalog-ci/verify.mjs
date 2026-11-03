@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-export const FILES = ['a-ru.bin', 'a-ua.bin', 'a-mm.bin'];
+export const FILES = ['a-ru.bin', 'a-ua.bin', 'a-mm.bin', 'a-def.bin'];
 const MAX_VALIDITY = 90 * 86400 * 1000;
 const META = ['product', 'platform', 'market_iso', 'config_version', 'inventory_revision', 'issued_at', 'expires_at'];
 const fail = reason => { throw new Error(reason); };
@@ -57,7 +57,7 @@ export function checkPaths(changes) {
 
 export function verifySet(readCandidate, readPrevious, keys, now = Date.now()) {
   const results = FILES.map(name => {
-    const market = name.slice(2, 4).toUpperCase();
+    const market = name.slice(2, -4).toUpperCase();
     const result = decode(readCandidate(name), market, keys, now);
     const previous = readPrevious(name);
     if (previous) {
