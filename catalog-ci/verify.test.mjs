@@ -20,9 +20,9 @@ function encode(market, patch = {}, headerPatch = {}) {
   fixed.writeUInt32BE(encodedHeader.length, 6); fixed.writeUInt32BE(body.length, 10); fixed.writeUInt16BE(signature.length, 14);
   return Buffer.concat([fixed, encodedHeader, body, signature]);
 }
-const candidate = (name, patch) => encode(name.slice(2, 4).toUpperCase(), patch);
-test('accepts consistent signed three-market snapshot', () => {
-  assert.equal(verifySet(candidate, () => null, keys, now).length, 3);
+const candidate = (name, patch) => encode(name.slice(2, -4).toUpperCase(), patch);
+test('accepts consistent signed four-market snapshot', () => {
+  assert.equal(verifySet(candidate, () => null, keys, now).length, 4);
 });
 test('rejects modified bytes, unknown key, wrong market and mismatched metadata', () => {
   const modified = encode('RU'); modified[modified.length - 1] ^= 1;
@@ -44,7 +44,7 @@ test('rejects rollback and different market revisions or issue times', () => {
   }
 });
 test('expired historical baseline does not block a valid refresh', () => {
-  assert.equal(verifySet(candidate, name => candidate(name, {issued_at: now - 90000000, expires_at: now - 1000}), keys, now).length, 3);
+  assert.equal(verifySet(candidate, name => candidate(name, {issued_at: now - 90000000, expires_at: now - 1000}), keys, now).length, 4);
 });
 test('requires every market and rejects empty pools, invalid groups and private fields', () => {
   assert.throws(() => verifySet(name => name === FILES[2] ? Buffer.alloc(0) : candidate(name), () => null, keys, now), /invalid_format/);
@@ -57,4 +57,11 @@ test('rejects workflow/code changes, deletions, renames and empty updates', () =
   for (const changes of [[], [{status: 'M', path: '.github/workflows/verify-node-catalog.yml'}], [{status: 'D', path: 'a-ru.bin'}], [{status: 'R100', path: 'a-ru.bin'}]]) {
     assert.throws(() => checkPaths(changes), /only_catalog/);
   }
+});
+
+test('DEF requires its full scope and is mandatory; unknown catalogs remain rejected', () => {
+  assert.throws(() => verifySet(name => name === 'a-def.bin' ? encode('DE') : candidate(name), () => null, keys, now), /invalid_scope/);
+  assert.throws(() => verifySet(name => name === 'a-def.bin' ? Buffer.alloc(0) : candidate(name), () => null, keys, now), /invalid_format/);
+  checkPaths([{status: 'A', path: 'a-def.bin'}]);
+  assert.throws(() => checkPaths([{status: 'A', path: 'a-us.bin'}]), /only_catalog/);
 });
